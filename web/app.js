@@ -22,7 +22,7 @@
 
   const STATE = {
     mode: 'live',
-    token: localStorage.getItem('tct_token') || '',
+    token: '',
     apiUrl: (window.APP_CONFIG && window.APP_CONFIG.API_URL) || localStorage.getItem('tct_api_url') || '',
     data: null,
     activeView: 'dashboard',
@@ -1425,7 +1425,7 @@
       openModal('Add Team Member', '' +
         '<form id="emp-form" class="form-stack">' +
           '<div class="field"><label>Full Name</label><input name="full_name" required /></div>' +
-          '<div class="field"><label>Work Email</label><input type="email" name="email" required placeholder="name@vmgassociates.in" /></div>' +
+          '<div class="field"><label>Work Email</label><input type="email" name="email" required placeholder="Enter your email" /></div>' +
           '<div class="field"><label>Hierarchy Role</label><select name="role">' +
             ROLE_HIERARCHY.map((r) => '<option value="' + esc(r.role) + '">' + esc(r.role) + ' (Level ' + r.level + ')</option>').join('') +
           '</select></div>' +
@@ -1591,9 +1591,14 @@
      ======================================================================== */
 
   function handleSignOut() {
+    const oldToken = STATE.token;
+    if (oldToken && STATE.mode === 'live' && STATE.apiUrl) {
+      fetch(STATE.apiUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'logout', token: oldToken, payload: {} }) }).catch(() => {});
+    }
     STATE.token = '';
     STATE.data = null;
     localStorage.removeItem('tct_token');
+    const pinEl = document.getElementById('login-pin'); if (pinEl) pinEl.value = '';
     document.getElementById('app-shell').classList.add('hidden');
     document.getElementById('login-screen').classList.remove('hidden');
   }
@@ -1627,7 +1632,6 @@
       try {
         const res = await apiCall('login', { email: email, pin: pin });
         STATE.token = res.token;
-        localStorage.setItem('tct_token', res.token);
         await refreshData();
       } catch (err) {
         errEl.textContent = err.message;
@@ -1679,11 +1683,8 @@
       });
     });
 
+    localStorage.removeItem('tct_token');
     startAutoSync();
-    if (STATE.token && STATE.apiUrl) {
-      STATE.mode = 'live';
-      refreshData();
-    }
   }
 
   document.addEventListener('DOMContentLoaded', initApp);
