@@ -1613,12 +1613,28 @@
     emailInput.value = localStorage.getItem('tct_last_email') || '';
     if (urlInput) urlInput.value = STATE.apiUrl;
 
-    document.getElementById('login-form').addEventListener('submit', async (ev) => {
+    const loginForm = document.getElementById('login-form');
+    const pinInput = document.getElementById('login-pin');
+    const submitBtn = document.getElementById('login-submit-btn');
+
+    [emailInput, pinInput].forEach((inp) => {
+      if (!inp) return;
+      inp.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          if (loginForm.requestSubmit) loginForm.requestSubmit();
+          else loginForm.dispatchEvent(new Event('submit', { cancelable: true }));
+        }
+      });
+    });
+
+    loginForm.addEventListener('submit', async (ev) => {
       ev.preventDefault();
+      if (submitBtn && submitBtn.disabled) return;
       const errEl = document.getElementById('login-error');
       errEl.classList.add('hidden');
       const email = emailInput.value.trim();
-      const pin = document.getElementById('login-pin').value.trim();
+      const pin = pinInput.value.trim();
       const apiUrl = (urlInput && urlInput.value.trim()) || STATE.apiUrl;
       if (!apiUrl) {
         errEl.textContent = 'Backend connection URL is missing in config.js. Please contact your administrator.';
@@ -1629,13 +1645,22 @@
       STATE.apiUrl = apiUrl;
       localStorage.setItem('tct_api_url', apiUrl);
       localStorage.setItem('tct_last_email', email);
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Signing in...'; }
       try {
         const res = await apiCall('login', { email: email, pin: pin });
         STATE.token = res.token;
-        await refreshData();
+        if (res.bootstrap) {
+          STATE.data = res.bootstrap;
+          renderShell();
+          renderView();
+        } else {
+          await refreshData();
+        }
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
+      } finally {
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Sign In'; }
       }
     });
 
