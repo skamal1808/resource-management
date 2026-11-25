@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>Team Resource & Compliance Tracker</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" type="image/png" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <!-- LOGIN SCREEN -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="brand-badge">VMG &amp; ASSOCIATES</div>
+      <h1>Team Resource &amp; Compliance Tracker</h1>
+      <p class="login-subtitle">Sign in with your work email &amp; 6-digit PIN (100% Google Sheets &amp; Drive — no Entra ID required).</p>
+
+      <form id="login-form" class="form-stack">
+        <div class="field">
+          <label for="login-email">Work Email</label>
+          <input id="login-email" type="email" required autocomplete="email" placeholder="shahrukh.kamal@vmgassociates.in" />
+        </div>
+        <div class="field">
+          <label for="login-pin">PIN</label>
+          <input id="login-pin" type="password" inputmode="numeric" required autocomplete="current-password" placeholder="6-digit PIN (initial: 123456)" />
+        </div>
+        <div class="field">
+          <label for="login-api-url">Apps Script Web App URL <span class="muted">(saved on this device)</span></label>
+          <input id="login-api-url" type="url" placeholder="Paste your Apps Script Web App URL" />
+        </div>
+        <div id="login-error" class="alert alert-error hidden"></div>
+        <button type="submit" class="btn btn-primary btn-full" id="login-submit-btn">Sign In</button>
+      </form>
+
+      <div class="divider"><span>or explore without connecting Sheets</span></div>
+      <div class="demo-actions">
+        <button type="button" class="btn btn-secondary btn-full" id="demo-partner-btn">Preview Demo as Partner (Shahrukh Kamal)</button>
+        <button type="button" class="btn btn-ghost btn-full" id="demo-exec-btn">Preview Demo as Executive (Locked View)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN APP SHELL -->
+  <div id="app-shell" class="app-shell hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <div>
+          <div class="sidebar-firm" id="firm-name-label">VMG &amp; Associates</div>
+          <div class="sidebar-title">Compliance Tracker</div>
+        </div>
+        <button id="close-sidebar-btn" class="icon-btn mobile-only" aria-label="Close menu">&times;</button>
+      </div>
+
+      <div class="user-chip" id="user-chip"></div>
+      <nav id="nav-menu" class="nav-menu"></nav>
+
+      <div class="sidebar-footer">
+        <button id="change-pin-btn" class="btn btn-ghost btn-sm btn-full">Change PIN</button>
+        <button id="logout-btn" class="btn btn-outline btn-sm btn-full">Sign Out</button>
+      </div>
+    </aside>
+
+    <div class="main-column">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="open-sidebar-btn" class="icon-btn mobile-only" aria-label="Open menu">&#9776;</button>
+          <div>
+            <h2 id="view-title">Compliance Control Center</h2>
+            <div id="view-subtitle" class="topbar-subtitle"></div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <span id="mode-pill" class="pill pill-info hidden">Demo Mode</span>
+          <button id="quick-assign-btn" class="btn btn-primary btn-sm hidden">+ Assign Task</button>
+          <button id="refresh-btn" class="btn btn-outline btn-sm">Refresh</button>
+        </div>
+      </header>
+
+      <main id="view-container" class="view-container"></main>
+    </div>
+  </div>
+
+  <!-- UNIVERSAL MODAL -->
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal</h3>
+        <button id="modal-close-btn" class="icon-btn" aria-label="Close">&times;</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="./config.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "team-compliance-tracker",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Native Windows & macOS desktop app (Tauri v2) + mobile PWA for CA Firm Resource & Compliance Tracking (100% Google Sheets & Drive)",
+  "scripts": {
+    "dev": "npx serve web -l 4173",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0"
+  }
+}
