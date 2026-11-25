@@ -261,7 +261,7 @@
     return {
       today: today,
       user: user,
-      firm_name: 'VMG & Associates',
+      firm_name: 'TCA India',
       drive_root_url: 'https://drive.google.com',
       last_backup_at: shiftDate(-1) + 'T23:00:00+05:30',
       self_status_lock_hour: 11,
@@ -533,7 +533,7 @@
     const u = d.user;
     document.getElementById('login-screen').classList.add('hidden');
     document.getElementById('app-shell').classList.remove('hidden');
-    document.getElementById('firm-name-label').textContent = d.firm_name || 'VMG & Associates';
+    document.getElementById('firm-name-label').textContent = d.firm_name || 'TCA India';
     document.getElementById('user-chip').innerHTML =
       '<strong>' + esc(u.full_name) + '</strong>' +
       '<div>' + esc(u.role) + ' &bull; ' + esc(u.location || 'India') + '</div>';

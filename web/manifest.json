@@ -1,7 +1,7 @@
 {
-  "name": "Team Resource & Compliance Tracker",
-  "short_name": "Compliance",
-  "description": "CA Firm Resource Capacity, Statutory Compliance & Timesheet Tracker (Google Sheets + Drive)",
+  "name": "TCA India — Compliance Tracker",
+  "short_name": "TCA India",
+  "description": "TCA India Resource Capacity, Statutory Compliance & Timesheet Tracker (Google Sheets + Drive)",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
