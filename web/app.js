@@ -21,9 +21,9 @@
   ];
 
   const STATE = {
-    mode: 'live', // 'live' | 'demo'
+    mode: 'live',
     token: localStorage.getItem('tct_token') || '',
-    apiUrl: localStorage.getItem('tct_api_url') || (window.APP_CONFIG && window.APP_CONFIG.API_URL) || '',
+    apiUrl: (window.APP_CONFIG && window.APP_CONFIG.API_URL) || localStorage.getItem('tct_api_url') || '',
     data: null,
     activeView: 'dashboard',
     selectedClientId: null,
@@ -533,7 +533,7 @@
     const u = d.user;
     document.getElementById('login-screen').classList.add('hidden');
     document.getElementById('app-shell').classList.remove('hidden');
-    document.getElementById('firm-name-label').textContent = d.firm_name || 'TCA India';
+    const firmEl = document.getElementById('firm-name-label'); if (firmEl) firmEl.textContent = d.firm_name || 'TCA India';
     document.getElementById('user-chip').innerHTML =
       '<strong>' + esc(u.full_name) + '</strong>' +
       '<div>' + esc(u.role) + ' &bull; ' + esc(u.location || 'India') + '</div>';
@@ -1307,8 +1307,8 @@
 
     const emailInput = document.getElementById('login-email');
     const urlInput = document.getElementById('login-api-url');
-    emailInput.value = localStorage.getItem('tct_last_email') || (window.APP_CONFIG && window.APP_CONFIG.DEFAULT_ADMIN_EMAIL) || '';
-    urlInput.value = STATE.apiUrl;
+    emailInput.value = localStorage.getItem('tct_last_email') || '';
+    if (urlInput) urlInput.value = STATE.apiUrl;
 
     document.getElementById('login-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
@@ -1316,9 +1316,9 @@
       errEl.classList.add('hidden');
       const email = emailInput.value.trim();
       const pin = document.getElementById('login-pin').value.trim();
-      const apiUrl = urlInput.value.trim();
+      const apiUrl = (urlInput && urlInput.value.trim()) || STATE.apiUrl;
       if (!apiUrl) {
-        errEl.textContent = 'Please paste your deployed Apps Script Web App URL, or click Preview Demo below.';
+        errEl.textContent = 'Backend connection URL is missing in config.js. Please contact your administrator.';
         errEl.classList.remove('hidden');
         return;
       }
@@ -1337,19 +1337,24 @@
       }
     });
 
-    document.getElementById('demo-partner-btn').addEventListener('click', async () => {
-      STATE.mode = 'demo';
-      DEMO_DB = buildDemoState('Partner');
-      STATE.activeView = 'dashboard';
-      await refreshData();
-    });
-
-    document.getElementById('demo-exec-btn').addEventListener('click', async () => {
-      STATE.mode = 'demo';
-      DEMO_DB = buildDemoState('Executive');
-      STATE.activeView = 'my-tasks';
-      await refreshData();
-    });
+    const demoPartnerBtn = document.getElementById('demo-partner-btn');
+    if (demoPartnerBtn) {
+      demoPartnerBtn.addEventListener('click', async () => {
+        STATE.mode = 'demo';
+        DEMO_DB = buildDemoState('Partner');
+        STATE.activeView = 'dashboard';
+        await refreshData();
+      });
+    }
+    const demoExecBtn = document.getElementById('demo-exec-btn');
+    if (demoExecBtn) {
+      demoExecBtn.addEventListener('click', async () => {
+        STATE.mode = 'demo';
+        DEMO_DB = buildDemoState('Executive');
+        STATE.activeView = 'my-tasks';
+        await refreshData();
+      });
+    }
 
     document.getElementById('logout-btn').addEventListener('click', handleSignOut);
     document.getElementById('refresh-btn').addEventListener('click', refreshData);
