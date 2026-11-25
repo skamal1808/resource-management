@@ -1,15 +1,15 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Compliance Tracker",
+  "productName": "TCA India Compliance Tracker",
   "version": "2.0.0",
-  "identifier": "in.vmgassociates.compliancetracker",
+  "identifier": "in.tcaindia.compliancetracker",
   "build": {
     "frontendDist": "../web"
   },
   "app": {
     "windows": [
       {
-        "title": "Team Resource & Compliance Tracker — VMG & Associates",
+        "title": "TCA India — Team Resource & Compliance Tracker",
         "width": 1280,
         "height": 840,
         "minWidth": 960,
@@ -25,7 +25,11 @@
     "active": true,
     "targets": ["nsis", "dmg"],
     "icon": [
-      "../web/icons/icon-512.png"
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
     ]
   }
 }
