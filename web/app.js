@@ -27,6 +27,7 @@
     data: null,
     activeView: 'dashboard',
     selectedClientId: null,
+    reportMonth: '',
     historyFilters: { q: '', resource: '', month: '' }
   };
 
@@ -73,6 +74,14 @@
     return STATE.data && STATE.data.user && Number(STATE.data.user.role_level) >= MANAGER_MIN_LEVEL;
   }
 
+  function canAssign() {
+    return STATE.data && STATE.data.user && Number(STATE.data.user.role_level) >= 2;
+  }
+
+  function canEditHierarchy() {
+    return STATE.data && STATE.data.user && Number(STATE.data.user.role_level) >= 6;
+  }
+
   function isExecutive() {
     return STATE.data && STATE.data.user && STATE.data.user.role === 'Executive';
   }
@@ -97,11 +106,13 @@
 
   function statusPill(status, overdue) {
     if (overdue) {
-      return '<span class="pill pill-red">Overdue</span> <span class="pill pill-gray">' + esc(status) + '</span>';
+      const tag = status === 'Waiting on Client' ? 'Client Delay' : 'Overdue';
+      return '<span class="pill ' + (status === 'Waiting on Client' ? 'pill-orange' : 'pill-red') + '">' + tag + '</span> <span class="pill pill-gray">' + esc(status) + '</span>';
     }
     const map = {
       'Pending': 'pill-orange',
       'In Process': 'pill-info',
+      'Waiting on Client': 'pill-orange',
       'Pending for Review': 'pill-purple',
       'Approved': 'pill-green',
       'Filed': 'pill-green',
@@ -165,14 +176,31 @@
     return json.data;
   }
 
-  async function refreshData() {
+  async function refreshData(silent) {
+    if (STATE._refreshing) return;
+    STATE._refreshing = true;
     try {
       STATE.data = await apiCall('getBootstrap', {});
       renderShell();
       renderView();
     } catch (err) {
-      showToast('Error: ' + err.message);
+      if (!silent) showToast('Error: ' + err.message);
+    } finally {
+      STATE._refreshing = false;
     }
+  }
+
+  function startAutoSync() {
+    if (STATE._autoSyncTimer) clearInterval(STATE._autoSyncTimer);
+    STATE._autoSyncTimer = setInterval(() => {
+      if (!STATE.token || !STATE.data || STATE.mode !== 'live') return;
+      if (document.hidden) return;
+      const modal = document.getElementById('modal-backdrop');
+      if (modal && !modal.classList.contains('hidden')) return;
+      const active = document.activeElement;
+      if (active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) return;
+      refreshData(true);
+    }, 30000);
   }
 
   /* ========================================================================
@@ -500,8 +528,26 @@
         { id: 'my-tasks', label: 'My Tasks', badge: myOpen },
         { id: 'todos', label: 'My To-Do List', badge: d.todos.filter((x) => x.status !== 'Done').length },
         { id: 'timesheet', label: 'Weekly Timesheet' },
-        { id: 'attendance', label: 'Mark Attendance' },
+        { id: 'attendance', label: 'Attendance & Leave' },
         { id: 'history', label: 'My Archived Tasks' }
+      ];
+    }
+
+    // Associates & Senior Associates: own workspace + Pending Review + Resource Availability & Downward Assignment
+    if (!isManager()) {
+      return [
+        { section: 'Work & Reviews' },
+        { id: 'my-tasks', label: 'My Tasks', badge: myOpen },
+        { id: 'pending-review', label: 'Pending Review', badge: pendingRev },
+        { id: 'my-assignments', label: 'My Resource Assignments' },
+        { id: 'calendar', label: 'Compliance Calendar' },
+        { id: 'history', label: 'My Archived Tasks' },
+        { section: 'Resources & Time' },
+        { id: 'resources', label: 'Resource Availability & Leave' },
+        { id: 'utilization', label: 'Resource Utilization' },
+        { id: 'attendance', label: 'Attendance & Planned Leave' },
+        { id: 'timesheet', label: 'Weekly Timesheet' },
+        { id: 'todos', label: 'My To-Do List', badge: d.todos.filter((x) => x.status !== 'Done').length }
       ];
     }
 
@@ -513,13 +559,14 @@
       { id: 'calendar', label: 'Compliance Calendar' },
       { id: 'history', label: 'Task History (Archive)' },
       { section: 'Resources & Time' },
-      { id: 'resources', label: 'Resource Availability' },
+      { id: 'resources', label: 'Resource Availability & Leave' },
       { id: 'utilization', label: 'Resource Utilization' },
       { id: 'my-assignments', label: 'My Resource Assignments' },
-      { id: 'attendance', label: 'Attendance Register' },
+      { id: 'attendance', label: 'Attendance & Planned Leave' },
       { id: 'timesheet', label: 'Weekly Timesheet' },
       { id: 'todos', label: 'My To-Do List', badge: d.todos.filter((x) => x.status !== 'Done').length },
-      { section: 'Firm Setup' },
+      { section: 'Firm Setup & Reports' },
+      { id: 'reports', label: 'Partner Reports (Hours & Payroll)' },
       { id: 'clients', label: 'Clients & KYC' },
       { id: 'library', label: 'Compliance Library' },
       { id: 'hierarchy', label: 'Team Hierarchy' },
@@ -539,7 +586,7 @@
       '<div>' + esc(u.role) + ' &bull; ' + esc(u.location || 'India') + '</div>';
 
     document.getElementById('mode-pill').classList.toggle('hidden', STATE.mode !== 'demo');
-    document.getElementById('quick-assign-btn').classList.toggle('hidden', !isManager());
+    document.getElementById('quick-assign-btn').classList.toggle('hidden', !canAssign());
 
     const navItems = getNavItems();
     const validIds = navItems.filter((x) => x.id).map((x) => x.id);
@@ -589,6 +636,7 @@
       'todos': ['My To-Do List', renderTodos],
       'clients': ['Clients & KYC Vault', renderClients],
       'library': ['Compliance Library & Auto-Scheduler', renderLibrary],
+      'reports': ['Partner Reports — Client Hours & Monthly Attendance', renderReports],
       'hierarchy': ['Team Hierarchy (7 Levels)', renderHierarchy],
       'history': ['Task History (Archived Filings)', renderHistory],
       'directory': ['Team Directory & Drive Backups', renderDirectory]
@@ -607,7 +655,8 @@
   function renderDashboard() {
     const d = STATE.data;
     const today = todayISO();
-    const overdue = d.tasks.filter(isOverdue).sort((a, b) => a.due_date.localeCompare(b.due_date));
+    const overdueTeam = d.tasks.filter((t) => isOverdue(t) && t.status !== 'Waiting on Client');
+    const waitingClient = d.tasks.filter((t) => t.status === 'Waiting on Client');
     const due7 = d.tasks.filter((t) => !isOverdue(t) && daysBetween(today, t.due_date) <= 7);
     const pendingRev = d.tasks.filter((t) => t.status === 'Pending for Review');
     const freeCount = (d.resource_availability || []).filter((r) => r.computed_status === 'Free').length;
@@ -621,28 +670,30 @@
 
     return '' +
       '<div class="kpi-grid">' +
-        '<div class="kpi-card kpi-red"><div class="kpi-label">Overdue Filings</div><div class="kpi-value">' + overdue.length + '</div></div>' +
+        '<div class="kpi-card kpi-red"><div class="kpi-label">Overdue (Team Action)</div><div class="kpi-value">' + overdueTeam.length + '</div></div>' +
+        '<div class="kpi-card kpi-orange"><div class="kpi-label">Waiting on Client</div><div class="kpi-value">' + waitingClient.length + '</div></div>' +
         '<div class="kpi-card kpi-orange"><div class="kpi-label">Due Within 7 Days</div><div class="kpi-value">' + due7.length + '</div></div>' +
         '<div class="kpi-card kpi-blue"><div class="kpi-label">Pending Review</div><div class="kpi-value">' + pendingRev.length + '</div></div>' +
         '<div class="kpi-card kpi-green"><div class="kpi-label">Free Resources Now</div><div class="kpi-value">' + freeCount + '</div></div>' +
         '<div class="kpi-card"><div class="kpi-label">Filed &amp; Archived</div><div class="kpi-value">' + d.archived_tasks.length + '</div></div>' +
       '</div>' +
       '<div class="card">' +
-        '<div class="card-header"><h3>Active Compliance Queue (Overdue First)</h3><span class="muted">Read-only overview &bull; Use My Tasks or Pending Review for workflow actions</span></div>' +
+        '<div class="card-header"><h3>Active Compliance Queue (Overdue First)</h3><span class="muted">Client delays separated from team delays &bull; 1-click Reassign available</span></div>' +
         '<div class="table-wrap"><table><thead><tr>' +
-          '<th>Client</th><th>Compliance</th><th>Assigned To</th><th>Reviewer</th><th>Due Date</th><th>Status</th>' +
+          '<th>Client</th><th>Compliance</th><th>Assigned To</th><th>Reviewer</th><th>Due Date</th><th>Status</th><th>Action</th>' +
         '</tr></thead><tbody>' +
         (sortedTasks.length ? sortedTasks.map((t) => {
           const ov = isOverdue(t);
-          return '<tr class="' + (ov ? 'row-overdue' : '') + '">' +
+          return '<tr class="' + (ov && t.status !== 'Waiting on Client' ? 'row-overdue' : '') + '">' +
             '<td><strong>' + esc(t.client_name) + '</strong></td>' +
-            '<td>' + esc(t.compliance_name) + '<div class="muted">' + esc(t.period_label || t.frequency) + '</div></td>' +
+            '<td>' + esc(t.compliance_name) + '<div class="muted">' + esc(t.remarks || t.period_label || t.frequency) + '</div></td>' +
             '<td>' + esc(t.assigned_to_name) + '</td>' +
             '<td>' + esc(t.reviewer_name) + '</td>' +
             '<td><strong>' + formatIndianDate(t.due_date) + '</strong></td>' +
             '<td>' + statusPill(t.status, ov) + '</td>' +
+            '<td><button class="btn btn-outline btn-sm" data-act="reassign-task" data-id="' + esc(t.task_id) + '">Reassign</button></td>' +
           '</tr>';
-        }).join('') : '<tr><td colspan="6" class="muted">No active compliance tasks right now.</td></tr>') +
+        }).join('') : '<tr><td colspan="7" class="muted">No active compliance tasks right now.</td></tr>') +
         '</tbody></table></div>' +
       '</div>';
   }
@@ -651,7 +702,7 @@
     const u = STATE.data.user;
     const mine = STATE.data.tasks.filter((t) => t.assigned_to_id === u.employee_id);
     return '<div class="card">' +
-      '<div class="card-header"><h3>Tasks Assigned to ' + esc(u.full_name) + '</h3><span class="muted">Pending &rarr; In Process &rarr; Pending for Review &rarr; Approved &rarr; Filed</span></div>' +
+      '<div class="card-header"><h3>Tasks Assigned to ' + esc(u.full_name) + '</h3><span class="muted">Pending &rarr; In Process / Waiting on Client &rarr; Pending for Review &rarr; Approved &rarr; Filed</span></div>' +
       '<div class="table-wrap"><table><thead><tr>' +
         '<th>Client &amp; Compliance</th><th>Reviewer</th><th>Due Date</th><th>Status</th><th>Action</th>' +
       '</tr></thead><tbody>' +
@@ -659,20 +710,24 @@
         const ov = isOverdue(t);
         let actionBtn = '';
         if (t.status === 'Pending') {
-          actionBtn = '<button class="btn btn-primary btn-sm" data-act="start-task" data-id="' + esc(t.task_id) + '">Start Work</button>';
+          actionBtn = '<button class="btn btn-primary btn-sm" data-act="start-task" data-id="' + esc(t.task_id) + '">Start Work</button> ' +
+            '<button class="btn btn-outline btn-sm" data-act="wait-client" data-id="' + esc(t.task_id) + '">Waiting on Client</button>';
         } else if (t.status === 'In Process') {
-          actionBtn = '<button class="btn btn-warning btn-sm" data-act="submit-review" data-id="' + esc(t.task_id) + '">Submit for Review</button>';
+          actionBtn = '<button class="btn btn-warning btn-sm" data-act="submit-review" data-id="' + esc(t.task_id) + '">Submit for Review</button> ' +
+            '<button class="btn btn-outline btn-sm" data-act="wait-client" data-id="' + esc(t.task_id) + '">Waiting on Client</button>';
+        } else if (t.status === 'Waiting on Client') {
+          actionBtn = '<button class="btn btn-primary btn-sm" data-act="start-task" data-id="' + esc(t.task_id) + '">Resume Work</button>';
         } else if (t.status === 'Pending for Review') {
           actionBtn = '<span class="muted">Awaiting ' + esc(t.reviewer_name) + '</span>';
         } else if (t.status === 'Approved') {
           actionBtn = '<button class="btn btn-success btn-sm" data-act="open-filing-modal" data-id="' + esc(t.task_id) + '">Upload Filing &amp; Close</button>';
         }
-        return '<tr class="' + (ov ? 'row-overdue' : '') + '">' +
+        return '<tr class="' + (ov && t.status !== 'Waiting on Client' ? 'row-overdue' : '') + '">' +
           '<td><strong>' + esc(t.client_name) + '</strong><div>' + esc(t.compliance_name) + '</div><div class="muted">' + esc(t.remarks || '') + '</div></td>' +
           '<td>' + esc(t.reviewer_name) + '</td>' +
           '<td>' + formatIndianDate(t.due_date) + '</td>' +
           '<td>' + statusPill(t.status, ov) + '</td>' +
-          '<td>' + actionBtn + '</td>' +
+          '<td class="action-row">' + actionBtn + '</td>' +
         '</tr>';
       }).join('') : '<tr><td colspan="5" class="muted">You have no active tasks assigned right now.</td></tr>') +
       '</tbody></table></div></div>';
@@ -720,7 +775,7 @@
           '<td>' + esc(t.compliance_name) + '</td>' +
           '<td>' + formatIndianDate(t.due_date) + '</td>' +
           '<td>' + statusPill(t.status, isOverdue(t)) + '</td>' +
-          '<td><button class="btn btn-outline btn-sm" data-act="end-early" data-id="' + esc(t.task_id) + '">End Assignment Early</button></td>' +
+          '<td class="action-row"><button class="btn btn-outline btn-sm" data-act="reassign-task" data-id="' + esc(t.task_id) + '">Reassign</button><button class="btn btn-outline btn-sm" data-act="end-early" data-id="' + esc(t.task_id) + '">End Early</button></td>' +
         '</tr>'
       ).join('') : '<tr><td colspan="6" class="muted">No active assignments under your supervision.</td></tr>') +
       '</tbody></table></div></div>';
@@ -728,16 +783,22 @@
 
   function renderResources() {
     const list = STATE.data.resource_availability || [];
+    const u = STATE.data.user;
+    const bookings = STATE.data.bookings || [];
+    const plannedLeaves = bookings.filter((b) => String(b.client_name || '').indexOf('PLANNED_LEAVE:') === 0);
+    const clientBookings = bookings.filter((b) => String(b.client_name || '').indexOf('PLANNED_LEAVE:') !== 0);
+
     return '<div class="card">' +
       '<div class="card-header">' +
-        '<h3>Real-Time Resource Availability (Below-Manager Staff Only)</h3>' +
+        '<h3>Real-Time Resource Availability (Below-Manager Staff)</h3>' +
         '<div class="action-row">' +
-          '<button class="btn btn-secondary btn-sm" id="btn-open-booking">Book / Block Resource</button>' +
+          (u.role !== 'Partner' ? '<button class="btn btn-primary btn-sm" id="btn-schedule-leave">+ Schedule Holiday / Leave</button>' : '') +
+          (isManager() ? '<button class="btn btn-secondary btn-sm" id="btn-open-booking">Book / Block Resource</button>' : '') +
         '</div>' +
       '</div>' +
-      '<div class="card-body"><div class="alert alert-info">Priority: <strong>On Leave / Exam Leave</strong> &rarr; <strong>Absent</strong> &rarr; <strong>Blocked</strong> &rarr; <strong>Free (0)</strong> / <strong>Available Soon (1)</strong> / <strong>Busy (2+)</strong>. Employees can self-edit leave status only before <strong>11:00 AM IST</strong>; Partners are permanently Always Available.</div></div>' +
+      '<div class="card-body"><div class="alert alert-info">Priority: <strong>Planned / Manual Leave</strong> &rarr; <strong>Absent</strong> &rarr; <strong>Blocked</strong> &rarr; <strong>Free (0)</strong> / <strong>Available Soon (1)</strong> / <strong>Busy (2+)</strong>. Same-day self-updates lock at <strong>11:00 AM IST</strong>; future holidays can be scheduled anytime.</div></div>' +
       '<div class="table-wrap"><table><thead><tr>' +
-        '<th>Resource</th><th>Role &amp; Office</th><th>Attendance</th><th>Active Tasks</th><th>Working With</th><th>Expected Free</th><th>Status</th><th>Quick Switch</th>' +
+        '<th>Resource</th><th>Role &amp; Office</th><th>Attendance</th><th>Active Tasks</th><th>Working With</th><th>Expected Free</th><th>Status</th>' + (isManager() ? '<th>Quick Switch</th>' : '') +
       '</tr></thead><tbody>' +
       (list.length ? list.map((r) =>
         '<tr>' +
@@ -748,13 +809,27 @@
           '<td>' + esc(r.working_with || '—') + '</td>' +
           '<td>' + (r.expected_free_date ? formatIndianDate(r.expected_free_date) : '<span class="pill pill-green">Free</span>') + '</td>' +
           '<td>' + statusPill(r.computed_status) + '</td>' +
-          '<td class="action-row">' +
+          (isManager() ? '<td class="action-row">' +
             '<button class="btn btn-outline btn-sm" data-act="set-avail" data-emp="' + esc(r.employee_id) + '" data-st="Available">Avail</button>' +
             '<button class="btn btn-outline btn-sm" data-act="set-avail" data-emp="' + esc(r.employee_id) + '" data-st="On Leave">Leave</button>' +
             '<button class="btn btn-outline btn-sm" data-act="set-avail" data-emp="' + esc(r.employee_id) + '" data-st="Exam Leave">Exam</button>' +
-          '</td>' +
+          '</td>' : '') +
         '</tr>'
       ).join('') : '<tr><td colspan="8" class="muted">No active below-Manager resources found.</td></tr>') +
+      '</tbody></table></div></div>' +
+      '<div class="card"><div class="card-header"><h3>Active &amp; Upcoming Planned Leaves / Holidays</h3></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Team Member</th><th>Leave Type</th><th>From</th><th>To</th><th>Reason</th><th>Action</th></tr></thead><tbody>' +
+      (plannedLeaves.length ? plannedLeaves.map((l) => {
+        const ltype = String(l.client_name).replace('PLANNED_LEAVE:', '') || 'On Leave';
+        const canCancel = isManager() || l.employee_id === u.employee_id;
+        return '<tr><td><strong>' + esc(l.employee_name) + '</strong></td><td>' + statusPill(ltype) + '</td><td>' + formatIndianDate(l.start_date) + '</td><td>' + formatIndianDate(l.end_date) + '</td><td>' + esc(l.reason) + '</td><td>' + (canCancel ? '<button class="btn btn-outline btn-sm" data-act="cancel-leave" data-id="' + esc(l.booking_id) + '">Cancel</button>' : '—') + '</td></tr>';
+      }).join('') : '<tr><td colspan="6" class="muted">No active or upcoming planned leaves scheduled.</td></tr>') +
+      '</tbody></table></div></div>' +
+      '<div class="card"><div class="card-header"><h3>Active Client Resource Bookings</h3></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Resource</th><th>Client / Engagement</th><th>Booked By</th><th>From</th><th>To</th><th>Reason</th></tr></thead><tbody>' +
+      (clientBookings.length ? clientBookings.map((b) =>
+        '<tr><td><strong>' + esc(b.employee_name) + '</strong></td><td>' + esc(b.client_name) + '</td><td>' + esc(b.booked_by_name) + '</td><td>' + formatIndianDate(b.start_date) + '</td><td>' + formatIndianDate(b.end_date) + '</td><td>' + esc(b.reason) + '</td></tr>'
+      ).join('') : '<tr><td colspan="6" class="muted">No active client bookings.</td></tr>') +
       '</tbody></table></div></div>';
   }
 
@@ -810,6 +885,7 @@
     const u = d.user;
     const myToday = d.attendance_today.find((a) => a.employee_id === u.employee_id);
     const todayRows = d.attendance_today || [];
+    const myLeaves = (d.bookings || []).filter((b) => b.employee_id === u.employee_id && String(b.client_name || '').indexOf('PLANNED_LEAVE:') === 0);
     return '' +
       '<div class="card"><div class="card-header"><h3>Daily Check-In (GPS Verified)</h3><span class="muted">Late mark applies after 10:30 AM IST</span></div>' +
       '<div class="card-body">' +
@@ -818,12 +894,34 @@
           (myToday.latitude ? ' &bull; GPS: ' + esc(myToday.latitude) + ', ' + esc(myToday.longitude) : '') + '</div>'
         : '<button class="btn btn-success" id="btn-mark-present">Mark Present Now (Capture Time &amp; GPS)</button>') +
       '</div></div>' +
-      (isManager() ? '<div class="card"><div class="card-header"><h3>Today\'s Attendance Register (' + formatIndianDate(todayISO()) + ')</h3></div>' +
-        '<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Role</th><th>Check-In Time</th><th>Status</th><th>GPS Coordinates</th></tr></thead><tbody>' +
-        (todayRows.length ? todayRows.map((a) =>
-          '<tr><td><strong>' + esc(a.employee_name) + '</strong></td><td>' + esc(a.employee_role) + '</td><td>' + esc(a.check_in_time) + '</td><td>' + statusPill(a.status) + '</td><td class="muted">' + (a.latitude ? esc(a.latitude + ', ' + a.longitude) : '—') + '</td></tr>'
-        ).join('') : '<tr><td colspan="5" class="muted">No check-ins recorded yet today.</td></tr>') +
-        '</tbody></table></div></div>' : '');
+      (u.role !== 'Partner' ? '<div class="card"><div class="card-header"><h3>My Planned Leave / Holiday Calendar</h3><button class="btn btn-primary btn-sm" id="btn-schedule-leave">+ Schedule Holiday / Leave</button></div>' +
+        '<div class="table-wrap"><table><thead><tr><th>Leave Type</th><th>From</th><th>To</th><th>Reason</th><th>Action</th></tr></thead><tbody>' +
+        (myLeaves.length ? myLeaves.map((l) => {
+          const ltype = String(l.client_name).replace('PLANNED_LEAVE:', '') || 'On Leave';
+          return '<tr><td>' + statusPill(ltype) + '</td><td>' + formatIndianDate(l.start_date) + '</td><td>' + formatIndianDate(l.end_date) + '</td><td>' + esc(l.reason) + '</td><td><button class="btn btn-outline btn-sm" data-act="cancel-leave" data-id="' + esc(l.booking_id) + '">Cancel</button></td></tr>';
+        }).join('') : '<tr><td colspan="5" class="muted">No upcoming holidays or leaves scheduled. Click "+ Schedule Holiday / Leave" to block dates on the team availability tracker.</td></tr>') +
+        '</tbody></table></div></div>' : '') +
+      (isManager() ? '<div class="card"><div class="card-header"><h3>Today\'s Full Team Attendance Roster (' + formatIndianDate(todayISO()) + ')</h3><span class="muted">2nd &amp; 4th Saturdays + Sundays never auto-mark Absent (manual Mark Absent only) &bull; Mon–Fri auto-sweep at 7:00 PM IST</span></div>' +
+        '<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Role</th><th>Check-In Time</th><th>Status</th><th>GPS / Notes</th><th>Action</th></tr></thead><tbody>' +
+        d.employees.filter((e) => e.status === 'Active' && e.role !== 'Partner').map((emp) => {
+          const rec = todayRows.find((a) => a.employee_id === emp.employee_id);
+          const st = rec ? rec.status : (emp.availability_status === 'On Leave' || emp.availability_status === 'Exam Leave' ? emp.availability_status : 'Not Marked');
+          const timeStr = rec ? rec.check_in_time : '—';
+          const noteStr = rec ? (rec.latitude ? (rec.latitude + ', ' + rec.longitude) : (rec.location_note || '—')) : (emp.leave_reason || 'No check-in yet');
+          const actBtn = (!rec || rec.status !== 'Absent')
+            ? '<button class="btn btn-danger btn-sm" data-act="mark-absent" data-id="' + esc(emp.employee_id) + '">Mark Absent</button>'
+            : '<span class="muted">Logged Absent</span>';
+          return '<tr><td><strong>' + esc(emp.full_name) + '</strong></td><td>' + esc(emp.role) + '</td><td>' + esc(timeStr) + '</td><td>' + statusPill(st) + '</td><td class="muted">' + esc(noteStr) + '</td><td>' + actBtn + '</td></tr>';
+        }).join('') +
+        '</tbody></table></div></div>' : '') +
+      '<div class="card"><div class="card-header"><h3>Firm Holiday Calendar (No Auto-Absent on Holidays, Saturdays, or Sundays)</h3>' +
+      (isManager() ? '<button class="btn btn-primary btn-sm" id="btn-add-holiday">+ Add Firm Holiday</button>' : '') +
+      '</div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Holiday Name</th><th>Office</th>' + (isManager() ? '<th>Action</th>' : '') + '</tr></thead><tbody>' +
+      ((d.holidays || []).length ? d.holidays.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map((h) =>
+        '<tr><td><strong>' + formatIndianDate(h.date) + '</strong></td><td>' + esc(h.name) + '</td><td>' + esc(h.location || 'All Offices') + '</td>' +
+        (isManager() ? '<td><button class="btn btn-outline btn-sm" data-act="del-holiday" data-id="' + esc(h.holiday_id) + '">Remove</button></td>' : '') + '</tr>'
+      ).join('') : '<tr><td colspan="4" class="muted">No firm holidays listed yet.</td></tr>') +
+      '</tbody></table></div></div>';
   }
 
   function renderTimesheet() {
@@ -964,11 +1062,97 @@
       '</div></div>';
   }
 
+  function downloadCsv(filename, headers, rows) {
+    const csvEscape = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [headers.map(csvEscape).join(',')].concat(rows.map((r) => r.map(csvEscape).join(',')));
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function renderReports() {
+    const d = STATE.data;
+    const month = STATE.reportMonth || todayISO().slice(0, 7);
+    STATE.reportMonth = month;
+
+    const tsRows = (d.timesheet_details || []).filter((r) => !month || (r.work_date || '').slice(0, 7) === month);
+    const clientMap = {};
+    const empHoursMap = {};
+    let grandTotal = 0;
+    tsRows.forEach((r) => {
+      const h = parseFloat(r.hours) || 0;
+      if (h <= 0) return;
+      grandTotal += h;
+      const cname = r.client_name || 'Internal / Unassigned';
+      if (!clientMap[cname]) clientMap[cname] = { hours: 0, staff: new Set() };
+      clientMap[cname].hours += h;
+      if (r.employee_name) clientMap[cname].staff.add(r.employee_name);
+      const ename = r.employee_name || 'Unknown';
+      if (!empHoursMap[ename]) empHoursMap[ename] = { hours: 0, clients: new Set() };
+      empHoursMap[ename].hours += h;
+      if (r.client_name) empHoursMap[ename].clients.add(r.client_name);
+    });
+    const clientSummary = Object.keys(clientMap).map((k) => ({
+      client: k,
+      hours: Math.round(clientMap[k].hours * 100) / 100,
+      staff: Array.from(clientMap[k].staff).join(', '),
+      pct: grandTotal > 0 ? Math.round((clientMap[k].hours / grandTotal) * 1000) / 10 : 0
+    })).sort((a, b) => b.hours - a.hours);
+
+    const empSummary = Object.keys(empHoursMap).map((k) => ({
+      employee: k,
+      hours: Math.round(empHoursMap[k].hours * 100) / 100,
+      clients: empHoursMap[k].clients.size
+    })).sort((a, b) => b.hours - a.hours);
+
+    const attRows = (d.attendance_history || []).filter((a) => (a.date || '').slice(0, 7) === month);
+    const attMatrix = d.employees.filter((e) => e.status === 'Active' && e.role !== 'Partner').map((emp) => {
+      const mine = attRows.filter((a) => a.employee_id === emp.employee_id);
+      const cnt = (st) => mine.filter((a) => a.status === st).length;
+      return {
+        name: emp.full_name, role: emp.role, office: emp.location,
+        present: cnt('Present'), late: cnt('Late'), absent: cnt('Absent'),
+        onLeave: cnt('On Leave'), examLeave: cnt('Exam Leave'), total: mine.length
+      };
+    });
+
+    STATE._lastReportData = { month, clientSummary, empSummary, attMatrix };
+
+    return '' +
+      '<div class="card"><div class="card-body"><div class="filter-bar" style="margin:0;">' +
+        '<strong>Report Month:</strong> <input id="report-month-input" type="month" value="' + esc(month) + '" />' +
+        '<span class="muted">Total Firm Hours Logged: <strong>' + Math.round(grandTotal * 100) / 100 + ' hrs</strong></span>' +
+      '</div></div></div>' +
+      '<div class="card"><div class="card-header"><h3>Client-Wise Hours &amp; Billing Summary (' + esc(month) + ')</h3>' +
+        '<button class="btn btn-outline btn-sm" id="btn-export-client-hrs">Download CSV</button></div>' +
+        '<div class="table-wrap"><table><thead><tr><th>Client</th><th>Total Hours</th><th>% of Firm Hours</th><th>Team Members</th></tr></thead><tbody>' +
+        (clientSummary.length ? clientSummary.map((c) =>
+          '<tr><td><strong>' + esc(c.client) + '</strong></td><td><strong>' + c.hours + 'h</strong></td><td>' + c.pct + '%</td><td class="muted">' + esc(c.staff) + '</td></tr>'
+        ).join('') : '<tr><td colspan="4" class="muted">No client hours logged for ' + esc(month) + '.</td></tr>') +
+        '</tbody></table></div></div>' +
+      '<div class="card"><div class="card-header"><h3>Employee-Wise Hours Logged (' + esc(month) + ')</h3>' +
+        '<button class="btn btn-outline btn-sm" id="btn-export-emp-hrs">Download CSV</button></div>' +
+        '<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Total Hours</th><th>Clients Served</th></tr></thead><tbody>' +
+        (empSummary.length ? empSummary.map((e) =>
+          '<tr><td><strong>' + esc(e.employee) + '</strong></td><td><strong>' + e.hours + 'h</strong></td><td>' + e.clients + '</td></tr>'
+        ).join('') : '<tr><td colspan="3" class="muted">No employee timesheet hours logged for ' + esc(month) + '.</td></tr>') +
+        '</tbody></table></div></div>' +
+      '<div class="card"><div class="card-header"><h3>Monthly Attendance Summary Matrix — Payroll Ready (' + esc(month) + ')</h3>' +
+        '<button class="btn btn-success btn-sm" id="btn-export-att-csv">Download Payroll CSV</button></div>' +
+        '<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Role</th><th>Office</th><th>Present</th><th>Late</th><th>Absent</th><th>On Leave</th><th>Exam Leave</th><th>Total Days</th></tr></thead><tbody>' +
+        attMatrix.map((m) =>
+          '<tr><td><strong>' + esc(m.name) + '</strong></td><td>' + esc(m.role) + '</td><td>' + esc(m.office) + '</td><td>' + m.present + '</td><td>' + m.late + '</td><td><strong style="color:#dc2626;">' + m.absent + '</strong></td><td>' + m.onLeave + '</td><td>' + m.examLeave + '</td><td>' + m.total + '</td></tr>'
+        ).join('') +
+        '</tbody></table></div></div>';
+  }
+
   function renderHistory() {
     const f = STATE.historyFilters;
     const rows = (STATE.data.archived_tasks || []).filter((t) => {
       if (f.q) {
-        const hay = (t.client_name + ' ' + t.compliance_name + ' ' + t.assigned_to_name).toLowerCase();
+        const hay = (t.client_name + ' ' + t.compliance_name + ' ' + t.assigned_to_name + ' ' + (t.arn_number || '')).toLowerCase();
         if (hay.indexOf(f.q.toLowerCase()) === -1) return false;
       }
       if (f.month && (t.filing_date || '').slice(0, 7) !== f.month) return false;
@@ -976,20 +1160,21 @@
     });
     return '<div class="card"><div class="card-header"><h3>Filed &amp; Permanently Archived Compliance History</h3></div><div class="card-body">' +
       '<div class="filter-bar">' +
-        '<input id="hist-q" type="search" placeholder="Search client, compliance, or resource..." value="' + esc(f.q) + '" />' +
+        '<input id="hist-q" type="search" placeholder="Search client, compliance, resource, or ARN/Challan No..." value="' + esc(f.q) + '" style="min-width:280px;" />' +
         '<input id="hist-month" type="month" value="' + esc(f.month) + '" />' +
       '</div></div>' +
-      '<div class="table-wrap"><table><thead><tr><th>Client</th><th>Compliance</th><th>Prepared By</th><th>Reviewed By</th><th>Filed On</th><th>Drive Filing</th></tr></thead><tbody>' +
+      '<div class="table-wrap"><table><thead><tr><th>Client</th><th>Compliance</th><th>ARN / Ref No.</th><th>Prepared By</th><th>Reviewed By</th><th>Filed On</th><th>Drive Filing</th></tr></thead><tbody>' +
       (rows.length ? rows.map((t) =>
         '<tr>' +
           '<td><strong>' + esc(t.client_name) + '</strong></td>' +
           '<td>' + esc(t.compliance_name) + '</td>' +
+          '<td><strong>' + esc(t.arn_number || '—') + '</strong></td>' +
           '<td>' + esc(t.assigned_to_name) + '</td>' +
           '<td>' + esc(t.reviewer_name) + '</td>' +
           '<td>' + formatIndianDate(t.filing_date) + '</td>' +
           '<td>' + (t.filing_file_url ? '<a href="' + esc(t.filing_file_url) + '" target="_blank" rel="noopener">' + esc(t.filing_file_name || 'Open Filing') + '</a>' : '—') + '</td>' +
         '</tr>'
-      ).join('') : '<tr><td colspan="6" class="muted">No archived filings match your filter.</td></tr>') +
+      ).join('') : '<tr><td colspan="7" class="muted">No archived filings match your filter.</td></tr>') +
       '</tbody></table></div></div>';
   }
 
@@ -1010,6 +1195,7 @@
           '<td>' + esc(e.location) + '</td>' +
           '<td>' + statusPill(e.status) + '</td>' +
           '<td class="action-row">' +
+            (canEditHierarchy() ? '<button class="btn btn-outline btn-sm" data-act="edit-role" data-id="' + esc(e.employee_id) + '">Edit Role</button>' : '') +
             (e.employee_id !== d.user.employee_id ? '<button class="btn btn-outline btn-sm" data-act="toggle-emp" data-id="' + esc(e.employee_id) + '">' + (e.status === 'Active' ? 'Deactivate' : 'Reactivate') + '</button>' : '<span class="muted">You</span>') +
           '</td>' +
         '</tr>'
@@ -1023,7 +1209,8 @@
 
   function openAssignTaskModal() {
     const d = STATE.data;
-    const rankedResources = d.resource_availability || [];
+    const myLevel = Number(d.user.role_level);
+    const rankedResources = (d.resource_availability || []).filter((r) => Number(r.role_level) < myLevel);
     const reviewers = d.employees.filter((e) => e.status === 'Active' && e.role !== 'Executive');
 
     openModal('Assign Compliance Task (Auto Resource Suggestion)', '' +
@@ -1064,10 +1251,32 @@
     });
   }
 
+  function openReassignModal(taskId) {
+    const d = STATE.data;
+    const myLevel = Number(d.user.role_level);
+    const ranked = (d.resource_availability || []).filter((r) => Number(r.role_level) < myLevel);
+    openModal('Reassign Compliance Task (1-Click Handoff)', '' +
+      '<form id="reassign-form" class="form-stack">' +
+        '<div class="field"><label>New Assignee (Auto-ranked Free &rarr; Earliest Free)</label><select name="new_assigned_to_id" required>' +
+          ranked.map((r) => '<option value="' + esc(r.employee_id) + '">' + esc(r.full_name) + ' — ' + esc(r.role) + ' [' + esc(r.computed_status) + ', ' + r.active_task_count + ' active]</option>').join('') +
+        '</select></div>' +
+        '<button type="submit" class="btn btn-primary">Confirm Reassignment</button>' +
+      '</form>'
+    );
+    document.getElementById('reassign-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      try {
+        await apiCall('reassignTask', { task_id: taskId, new_assigned_to_id: ev.target.new_assigned_to_id.value });
+        closeModal(); showToast('Task reassigned & logged in Audit Trail.'); await refreshData();
+      } catch (err) { showToast('Error: ' + err.message); }
+    });
+  }
+
   function openFilingUploadModal(taskId) {
     openModal('Upload Filing Acknowledgement (Mandatory)', '' +
       '<form id="filing-upload-form" class="form-stack">' +
         '<div class="alert alert-info">File will be auto-named with Client + Compliance + IST Timestamp and stored in Google Drive. Once filed, the task is permanently locked and archived.</div>' +
+        '<div class="field"><label>ARN / Acknowledgement / Challan No. <span class="muted">(searchable in Task History)</span></label><input type="text" id="filing-arn-input" placeholder="e.g. AA0711261234567 / BSR-Challan No." /></div>' +
         '<div class="field"><label>Select Filing PDF / Acknowledgement</label><input type="file" id="filing-file-input" required /></div>' +
         '<button type="submit" class="btn btn-success">Upload to Drive &amp; Mark Filed</button>' +
       '</form>'
@@ -1080,6 +1289,7 @@
         const b64 = await readFileAsBase64(file);
         await apiCall('uploadFilingAndClose', {
           task_id: taskId,
+          arn_number: document.getElementById('filing-arn-input').value.trim(),
           file_name: file.name,
           mime_type: file.type || 'application/pdf',
           file_base64: b64
@@ -1119,6 +1329,26 @@
         showToast('Attendance marked!');
         await refreshData();
       } catch (err) { showToast('Error: ' + err.message); }
+    });
+
+    on('btn-schedule-leave', () => {
+      openModal('Schedule Holiday / Leave (Blocks Team Calendar)', '' +
+        '<form id="leave-form" class="form-stack">' +
+          '<div class="alert alert-info">Your dates will automatically show as <strong>On Leave</strong> in Resource Availability and auto-clear when you return.</div>' +
+          '<div class="field"><label>Leave Type</label><select name="leave_type"><option value="On Leave">On Leave / Holiday</option><option value="Exam Leave">Exam Leave</option></select></div>' +
+          '<div class="field"><label>Start Date</label><input type="date" name="start_date" required value="' + todayISO() + '" /></div>' +
+          '<div class="field"><label>End Date</label><input type="date" name="end_date" required value="' + todayISO() + '" /></div>' +
+          '<div class="field"><label>Reason</label><input name="reason" required placeholder="e.g. Family Holiday / CA Final Exam" /></div>' +
+          '<button type="submit" class="btn btn-primary">Block Calendar Dates</button>' +
+        '</form>'
+      );
+      document.getElementById('leave-form').addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        try {
+          await apiCall('schedulePlannedLeave', Object.fromEntries(new FormData(ev.target).entries()));
+          closeModal(); showToast('Holiday / leave scheduled on team calendar.'); await refreshData();
+        } catch (err) { showToast('Error: ' + err.message); }
+      });
     });
 
     on('btn-open-booking', () => {
@@ -1216,6 +1446,37 @@
       catch (err) { showToast('Error: ' + err.message); }
     });
 
+    on('btn-add-holiday', () => {
+      openModal('Add Firm Holiday', '' +
+        '<form id="holiday-form" class="form-stack">' +
+          '<div class="field"><label>Holiday Date</label><input type="date" name="date" required value="' + todayISO() + '" /></div>' +
+          '<div class="field"><label>Holiday Name</label><input name="name" required placeholder="e.g. Diwali / Holi" /></div>' +
+          '<div class="field"><label>Office</label><input name="location" value="All Offices" /></div>' +
+          '<button type="submit" class="btn btn-primary">Save Holiday</button>' +
+        '</form>'
+      );
+      document.getElementById('holiday-form').addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        try { await apiCall('createHoliday', Object.fromEntries(new FormData(ev.target).entries())); closeModal(); showToast('Firm holiday added.'); await refreshData(); }
+        catch (err) { showToast('Error: ' + err.message); }
+      });
+    });
+
+    const repM = document.getElementById('report-month-input');
+    if (repM) repM.addEventListener('change', (e) => { STATE.reportMonth = e.target.value; renderView(); });
+    on('btn-export-client-hrs', () => {
+      const r = STATE._lastReportData;
+      if (r) downloadCsv('TCA_Client_Hours_' + r.month + '.csv', ['Client', 'Total Hours', '% of Firm Hours', 'Team Members'], r.clientSummary.map((c) => [c.client, c.hours, c.pct + '%', c.staff]));
+    });
+    on('btn-export-emp-hrs', () => {
+      const r = STATE._lastReportData;
+      if (r) downloadCsv('TCA_Employee_Hours_' + r.month + '.csv', ['Employee', 'Total Hours', 'Clients Served'], r.empSummary.map((e) => [e.employee, e.hours, e.clients]));
+    });
+    on('btn-export-att-csv', () => {
+      const r = STATE._lastReportData;
+      if (r) downloadCsv('TCA_Attendance_Payroll_' + r.month + '.csv', ['Employee', 'Role', 'Office', 'Present', 'Late', 'Absent', 'On Leave', 'Exam Leave', 'Total Days'], r.attMatrix.map((m) => [m.name, m.role, m.office, m.present, m.late, m.absent, m.onLeave, m.examLeave, m.total]));
+    });
+
     const histQ = document.getElementById('hist-q');
     if (histQ) histQ.addEventListener('input', (e) => { STATE.historyFilters.q = e.target.value; renderView(); });
     const histM = document.getElementById('hist-month');
@@ -1228,6 +1489,14 @@
         const id = btn.dataset.id;
         try {
           if (act === 'start-task') { await apiCall('startTask', { task_id: id }); showToast('Task marked In Process.'); await refreshData(); }
+          else if (act === 'wait-client') {
+            const reason = window.prompt('What documents or info are pending from the client?');
+            if (reason === null) return;
+            await apiCall('markWaitingOnClient', { task_id: id, reason: reason });
+            showToast('Marked Waiting on Client.'); await refreshData();
+          }
+          else if (act === 'reassign-task') { openReassignModal(id); }
+          else if (act === 'del-holiday') { await apiCall('deleteHoliday', { holiday_id: id }); showToast('Holiday removed.'); await refreshData(); }
           else if (act === 'submit-review') { await apiCall('submitTaskForReview', { task_id: id }); showToast('Submitted for review.'); await refreshData(); }
           else if (act === 'open-filing-modal') { openFilingUploadModal(id); }
           else if (act === 'approve-task') { await apiCall('reviewTask', { task_id: id, decision: 'Approve' }); showToast('Task approved.'); await refreshData(); }
@@ -1278,6 +1547,35 @@
               const b64 = await readFileAsBase64(file);
               await apiCall('uploadClientKyc', { client_id: clientId, doc_type: ev.target.doc_type.value, file_name: file.name, mime_type: file.type, file_base64: b64 });
               closeModal(); showToast('KYC document uploaded to Google Drive.');
+            });
+          }
+          else if (act === 'mark-absent') {
+            const reason = window.prompt('Optional note / reason for marking Absent (leave blank if none):');
+            if (reason === null) return;
+            await apiCall('markEmployeeAbsent', { employee_id: id, reason: reason });
+            showToast('Marked Absent in Attendance Register.'); await refreshData();
+          }
+          else if (act === 'cancel-leave') { await apiCall('cancelPlannedLeave', { booking_id: id }); showToast('Planned leave cancelled.'); await refreshData(); }
+          else if (act === 'edit-role') {
+            const emp = STATE.data.employees.find((x) => x.employee_id === id);
+            if (!emp) return;
+            openModal('Edit Role & Hierarchy — ' + emp.full_name, '' +
+              '<form id="edit-role-form" class="form-stack">' +
+                '<input type="hidden" name="employee_id" value="' + esc(emp.employee_id) + '" />' +
+                '<div class="field"><label>Hierarchy Role</label><select name="role">' +
+                  ROLE_HIERARCHY.map((r) => '<option value="' + esc(r.role) + '" ' + (r.role === emp.role ? 'selected' : '') + '>' + esc(r.role) + ' (Level ' + r.level + ')</option>').join('') +
+                '</select></div>' +
+                '<div class="field"><label>Reporting To</label><input name="reporting_to" value="' + esc(emp.reporting_to || '') + '" placeholder="Optional reporting manager" /></div>' +
+                '<div class="field"><label>Office Location</label><input name="location" value="' + esc(emp.location || '') + '" /></div>' +
+                '<button type="submit" class="btn btn-primary">Save Role &amp; Hierarchy</button>' +
+              '</form>'
+            );
+            document.getElementById('edit-role-form').addEventListener('submit', async (ev) => {
+              ev.preventDefault();
+              try {
+                await apiCall('updateEmployeeRole', Object.fromEntries(new FormData(ev.target).entries()));
+                closeModal(); showToast('Role & hierarchy updated.'); await refreshData();
+              } catch (err) { showToast('Error: ' + err.message); }
             });
           }
           else if (act === 'toggle-emp') { await apiCall('toggleEmployeeStatus', { employee_id: id }); showToast('Employee status updated.'); await refreshData(); }
@@ -1381,6 +1679,7 @@
       });
     });
 
+    startAutoSync();
     if (STATE.token && STATE.apiUrl) {
       STATE.mode = 'live';
       refreshData();
